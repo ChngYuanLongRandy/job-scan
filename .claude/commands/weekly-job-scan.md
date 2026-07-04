@@ -56,8 +56,9 @@ Body:
 - If nothing clears fit >= 6, say so plainly. Do not pad with weak matches.
 - Skimmable — this is read on a phone.
 
-## Sending
-Send the digest email directly (Randy has reviewed a real output already).
+## First-run safety
+On the FIRST scheduled run, create the email as a **Gmail draft**, not sent.
+After Randy reviews one real output, switch this line to send directly.
 
 ## Standing decisions (change on request)
 1. Hidden-salary roles → include & flag (MCF mandates salary disclosure, so rare).

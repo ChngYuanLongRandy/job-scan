@@ -56,6 +56,26 @@ Python 3.9+; no dependencies. Tune the constants at the top of the script
 
 Requires a paid plan (Pro/Max/Team/Enterprise) with Claude Code on web.
 
+## If a run fails with "403 Tunnel connection failed"
+
+That's the sandbox egress proxy blocking the MCF call, not a code bug. The
+Bash/Python network path is allow-listed; `api.mycareersfuture.gov.sg` must be
+declared. `.claude/settings.json` in this repo already does that:
+
+```json
+{ "sandbox": { "network": { "allowedDomains": ["api.mycareersfuture.gov.sg"] } } }
+```
+
+This matters most for UNATTENDED routines: in an interactive session the first
+hit to a new domain shows an approval prompt, but a scheduled run has no one to
+approve, so it just 403s. Pre-declaring the domain removes the prompt. If your
+environment treats allowedDomains as a replacement rather than a merge, also
+re-add the hosts it needs by default (e.g. api.anthropic.com, github.com).
+
+Alternative: skip Bash networking entirely and have the routine fetch the API
+via Claude's WebFetch tool (governed by WebFetch permission rules, a separate
+layer from the Bash sandbox), then run the Python only to filter the saved JSON.
+
 ## Honest caveats
 
 - The MCF API field names are verified against its documented structure, but
