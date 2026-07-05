@@ -270,6 +270,37 @@ def main():
     kept.sort(key=lambda r: (-len(r["stack_signal"]["core_hits"]),
                              len(r["stack_signal"]["anti_hits"])))
 
+    # ---- De-duplication against seen.json (persists across runs) ----------
+    # seen.json maps job_uuid -> first_seen ISO date. We prune entries older
+    # than the freshness window so the file self-cleans, mark each candidate
+    # already_seen True/False, then record today's UUIDs. The LLM step shows
+    # only NEW (already_seen == False) roles; seen ones are suppressed.
+    # NOTE: this only persists if seen.json is committed back to the repo
+    # after the run (see the routine's commit step). On ephemeral disk with
+    # no commit-back, every run starts fresh and nothing is de-duplicated.
+    today = datetime.now(timezone.utc).date()
+    seen_store = {}
+    try:
+        with open("seen.json", encoding="utf-8") as fh:
+            seen_store = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        seen_store = {}
+    # prune expired
+    seen_store = {
+        uuid: d for uuid, d in seen_store.items()
+        if (today - datetime.fromisoformat(d).date()).days < days
+    }
+    new_count = 0
+    for rec in kept:
+        was_seen = rec["uuid"] in seen_store
+        rec["already_seen"] = was_seen
+        rec["first_seen"] = seen_store.get(rec["uuid"], today.isoformat())
+        if not was_seen:
+            seen_store[rec["uuid"]] = today.isoformat()
+            new_count += 1
+    with open("seen.json", "w", encoding="utf-8") as fh:
+        json.dump(seen_store, fh, indent=2, ensure_ascii=False)
+
     output = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "freshness_days": days,
@@ -280,6 +311,7 @@ def main():
         },
         "scanned": len(seen),
         "kept": len(kept),
+        "new_since_last_run": new_count,
         "dropped": dropped_summary,
         "candidates": kept[:30],   # cap what goes to the LLM scorer
     }
@@ -287,7 +319,7 @@ def main():
         json.dump(output, fh, indent=2, ensure_ascii=False)
 
     print(f"Scanned {len(seen)} unique listings; kept {len(kept)} "
-          f"(top 30 written to candidates.json).")
+          f"({new_count} new since last run; top 30 written to candidates.json).")
     print(f"Dropped: {dropped_summary}")
 
 
