@@ -46,9 +46,9 @@ MAX_PAGES_PER_TERM = 3          # safety cap: 300 listings per term
 SENIOR_MARKERS = re.compile(r"\b(senior|snr|sr\.?|lead|principal|staff|head)\b", re.I)
 
 # Titles that are explicitly out of scope (Randy: no backend-only roles).
-EXCLUDED_TITLE_MARKERS = re.compile(
-    r"\b(backend engineer|back-end engineer|back end engineer)\b", re.I
-)
+# Catches "Backend Engineer", "Software Engineer (Backend)", "Back-End Developer"
+# etc. Full-stack roles never carry "backend" in the TITLE, so title-level is safe.
+EXCLUDED_TITLE_MARKERS = re.compile(r"\bback[- ]?end\b", re.I)
 
 # Stack keywords used only for a cheap pre-signal (real scoring is LLM-side).
 CORE_STACK = ["java", "spring", "react", "typescript", "javascript"]
@@ -128,6 +128,23 @@ def stack_signal(rec: dict) -> dict:
     }
 
 
+YEARS_PATTERN = re.compile(
+    r"(?:minimum|min\.?|at least)?\s*(\d{1,2})\s*(?:\+|plus)?\s*(?:-\s*\d{1,2}\s*)?"
+    r"years?(?:'|s)?\s+(?:of\s+)?(?:relevant\s+|working\s+|hands[- ]on\s+|professional\s+)?"
+    r"(?:experience|exp\b)", re.I)
+
+
+def years_from_description(desc: str):
+    """Cheap extraction of an explicit years-of-experience ask from the JD.
+
+    Returns the LOWEST years figure mentioned with 'experience' (ranges like
+    '3-5 years' read as 3, since the lower bound is the entry ask), or None.
+    """
+    hits = [int(m.group(1)) for m in YEARS_PATTERN.finditer(desc or "")]
+    hits = [h for h in hits if 0 < h <= 20]
+    return min(hits) if hits else None
+
+
 def apply_filters(rec: dict, cutoff: datetime) -> tuple[bool, list[str]]:
     """Return (keep, flags). Hard-drop reasons return keep=False."""
     flags = []
@@ -150,10 +167,19 @@ def apply_filters(rec: dict, cutoff: datetime) -> tuple[bool, list[str]]:
         return False, ["excluded-title"]
 
     # Years of experience: drop if the structured field asks for more.
+    # REALITY CHECK (from live data): the /v2/search endpoint usually returns
+    # minimumYearsExperience as null, so also scan the description for an
+    # explicit "N+ years" ask as a cheap backstop. The LLM scorer remains the
+    # final authority on ambiguous cases.
     if rec["min_years"] is not None and rec["min_years"] > MAX_YEARS_EXPERIENCE:
         return False, ["too-many-years"]
     if rec["min_years"] is None:
-        flags.append("years-unstated")
+        desc_years = years_from_description(rec["description"])
+        if desc_years is not None and desc_years > MAX_YEARS_EXPERIENCE + 1:
+            # +1 slack: "4 years" asks are often negotiable at 3; 5+ is not.
+            return False, ["too-many-years-desc"]
+        flags.append("years-unstated" if desc_years is None
+                     else f"desc-says-{desc_years}y")
 
     # Salary: drop only when a stated max is below the floor.
     # Undisclosed salary is flagged, not dropped (decision: include-and-flag).

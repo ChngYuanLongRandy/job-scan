@@ -1,90 +1,88 @@
 ---
-description: Weekly MyCareersFuture job scan → fit-scored email digest for Randy
+description: Daily 4am MyCareersFuture job scan → top-5 fit-scored email digest for Randy
 ---
 
-# /weekly-job-scan
+# /weekly-job-scan  (now runs DAILY at 04:00 SGT — name kept for routine continuity)
 
-Run the full weekly job scan and email a digest. Each run is a fresh session —
+Run the full job scan and email a digest. Each run is a fresh session —
 carry no state between runs; everything needed is below.
 
-## Step 1 — Hard-filter stage
-Run `python3 mcf_job_scan.py`. It queries the public MyCareersFuture API
-(api.mycareersfuture.gov.sg/v2/jobs) for these titles: software engineer,
-full stack software engineer, full stack developer, software developer.
-It applies hard filters and writes `candidates.json`:
-- posted within last 7 days, not expired
-- `minimumYearsExperience` <= 3 (unstated → flag `years-unstated`)
-- salary max >= S$5,500 (undisclosed → flag `salary-undisclosed`, keep)
-- drops backend-only titles ("backend engineer")
-- flags Senior / Lead / Principal titles `senior-stretch` (does not drop)
-- every kept job carries a canonical MCF link
+## Step 1 — Get candidates.json (fetch-first, file fallback)
+1. Run `python3 mcf_job_scan.py`. If it prints a "Scanned N ... kept M" line,
+   fresh data is in `candidates.json` — use it and go to Step 2.
+   (The environment's Network access must allow api.mycareersfuture.gov.sg —
+   set via the environment's Custom network access, NOT the repo settings.json,
+   which the egress proxy ignores.)
+2. ONLY if the fetch fails (e.g. 403 Tunnel = egress policy): fall back to a
+   pre-existing `candidates.json` in the project root, but only if its
+   `generated_at` is within the last 3 days (produced by an external cron /
+   CI job). Do not retry the fetch or route around the proxy.
+3. If neither path yields usable data, send a short email saying exactly what
+   failed (include the error text and candidates.json's generated_at if one
+   exists). Do not fabricate listings.
 
-### Step 1b — FALLBACK if the network is blocked (403 Tunnel / egress denial)
-If the script fails with `Tunnel connection failed: 403` (the sandbox egress
-proxy blocking outbound bash/python), do NOT give up. Fetch the data yourself
-via your web-fetch tool — that path is not governed by the bash sandbox:
-1. `mkdir -p raw`
-2. For each of these search terms — `software engineer`,
-   `full stack software engineer`, `full stack developer`,
-   `software developer` — fetch page 0 and page 1 of:
-   `https://api.mycareersfuture.gov.sg/v2/search?limit=100&page=<N>`
-   as a POST with JSON body `{"search": "<term>", "sessionId": ""}`.
-   If your fetch tool only supports GET, try
-   `https://api.mycareersfuture.gov.sg/v2/jobs?limit=100&page=<N>&search=<url-encoded term>`
-   and use whichever returns a JSON body containing a `results` array.
-3. Save each raw JSON response verbatim to `raw/<term-slug>-p<N>.json`.
-4. Run `python3 mcf_job_scan.py --from-dir raw` — filtering is fully offline.
-Then continue to Step 2 as normal. In the digest, note which fetch path was
-used.
-
-If BOTH paths fail, or `candidates.json` has 0 candidates, send a short email
-stating exactly what failed (include the error text) instead of silently
-skipping. Do not fabricate listings to fill the email.
+Listing freshness window: 7 days (script default). In the digest, always state
+the data's `generated_at` timestamp.
 
 ## Step 2 — Read the résumé (source of truth)
-Read the Google Doc **Resume_RandyChng_v2**
-(fileId `1lbPFv7NzVAf1qS00J_e1ZcaHyXgQ9kguBiz5jj4Nwqg`) via the Google Drive
-connector, fresh this run. Extract skills, years per skill, and domain
-experience. Do not use a cached profile — the résumé is the living source.
+Read the Google Doc whose fileId is in the environment variable
+**RESUME_DOC_ID**. If that variable is unset or empty, default to
+`1lbPFv7NzVAf1qS00J_e1ZcaHyXgQ9kguBiz5jj4Nwqg` (Resume_RandyChng_v2).
+Read it via the Google Drive connector, fresh each run — never a cached
+profile. Extract skills, years per skill, and domain experience.
 
 ## Step 3 — Fit-score each candidate (0–10)
-For each candidate in `candidates.json`, score against the résumé:
-- **Backend language is its own factor.** Java / Spring backend = strong.
-  Node.js / Next.js backend = weak even when the frontend is React/TS
-  (Randy has no Node backend experience — never treat TS-frontend as
-  Node-backend coverage).
-- Frontend React / TypeScript = strong. Angular / Vue = partial.
-- Python / FastAPI = light (~1 yr, AIAP).
-- **Domain boost:** +1 for payments / banking / fintech / financial services.
-- Give each a one-line "why you fit" and an honest "gaps" note.
-- Seniority-flagged roles: include at most ONE, labelled "stretch pick", and
-  only if its score is >= 7 before the label.
+Randy's core stack — weight these heaviest: **Java, Spring Boot, React,
+TypeScript, JavaScript.** A close fit means the role's primary stack IS this
+stack.
+- **Years check (important):** the API's `minimumYearsExperience` is usually
+  null in search results, so READ THE DESCRIPTION for the actual years ask.
+  Randy has 3+ years. A close fit asks ≤3 (or ≤4, negotiable).
+- **Node.js is NOT Randy's stack.** A Node.js/Next.js backend role is NEVER
+  a close fit, no matter how much TypeScript/React it mentions. TS on the
+  frontend ≠ Node on the backend. Node-backend roles may only ever appear as
+  a stretch pick, explicitly labelled with that gap.
+- Frontend React/TypeScript = strong. Angular/Vue = partial.
+- Python/FastAPI = light (~1 yr, AIAP).
+- **Domain boost: +1** for banking / payments / fintech / financial services.
+- Candidates flagged `desc-says-Ny` had a cheap regex pass; your own read of
+  the description is authoritative.
 
-## Step 4 — Compose & send the email
+## Step 4 — Compose the email: EXACTLY top 5 = 3 close fits + 2 stretch
 Send to **chngyuanlong@gmail.com**. Subject:
-`Your weekly job match — N roles worth a look (week of <date>)`
+`Your daily job match — 3 close fits + 2 stretch (week of <date>)`
 
-Body:
-- Top 3–5 by fit score. Each row: title · company · fit /10 · years asked ·
-  salary (or "undisclosed") · why-you-fit · gaps · MCF link.
-  Links mandatory — no link, no row.
-- One "Filtered out this week" section: counts by drop reason
-  (too-many-years, below-salary-floor, stale, excluded-title) + 1–2 named
-  examples so the cut stays auditable.
-- If nothing clears fit >= 6, say so plainly. Do not pad with weak matches.
-- Skimmable — this is read on a phone.
+- **Close fits (3):** the three highest-scoring roles where Randy IS adequate:
+  stack matches his core (Java/Spring Boot/React/TS/JS), years ask ≤ his 3+,
+  no critical missing technology. As close as possible — prefer a 9 over a 7.
+- **Stretch (2):** roles worth seeing where Randy is NOT fully adequate —
+  more years required than he has, or a required technology he hasn't used or
+  lacks depth in (incl. Senior-titled roles, Node-backend roles). Each stretch
+  pick MUST state exactly what's missing ("asks 5y, you have 3+";
+  "backend is Node.js — not your stack").
+- Every row: title · company · fit /10 · years asked · salary (or
+  "undisclosed") · why-you-fit · gaps · MCF link. Links mandatory — no link,
+  no row.
+- If fewer than 3 genuine close fits exist, say so plainly and fill the
+  shortfall with stretch picks, clearly labelled. Never relabel a stretch as
+  a close fit to hit the quota.
+- One "Filtered out" section: counts by drop reason + 1–2 named examples.
+- Skimmable — read on a phone.
 
 ## First-run safety
-On the FIRST scheduled run, create the email as a **Gmail draft**, not sent.
-After Randy reviews one real output, switch this line to send directly.
+On the FIRST run after any config change, create the email as a **Gmail
+draft**, not sent. (The available Gmail connector only creates drafts anyway;
+a draft addressed to Randy is the deliverable.)
 
 ## Standing decisions (change on request)
-1. Hidden-salary roles → include & flag (MCF mandates salary disclosure, so rare).
-2. Senior-titled roles → max 1, shown as a flagged stretch pick.
-3. Domain → fintech / payments gets +1 fit boost.
-4. Résumé source → Resume_RandyChng_v2 (Google Doc), read live each run.
+1. Cadence: DAILY at 04:00 Asia/Singapore (set in the Routine's schedule UI).
+2. Listing freshness: 7 days.
+3. Digest: exactly 3 close fits + 2 stretch.
+4. Hidden-salary roles → include & flag.
+5. Domain → banking/fintech/payments +1 fit boost.
+6. Résumé source → env var RESUME_DOC_ID, defaulting to Resume_RandyChng_v2.
 
 ## Guardrails
 - Never fabricate a listing, salary, or link. Missing field → say so.
-- This routine only READS (MCF API, résumé) and sends ONE email.
+- This routine only READS (MCF API, résumé) and creates ONE Gmail draft.
   It must not write to Notion or Drive.
