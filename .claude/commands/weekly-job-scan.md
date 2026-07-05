@@ -1,13 +1,14 @@
 ---
-description: Daily 4am MyCareersFuture job scan → top-5 fit-scored email digest for Randy
+description: Weekly 4am MyCareersFuture job scan → top-5 fit-scored email digest for Randy
 ---
 
-# /weekly-job-scan  (now runs DAILY at 04:00 SGT — name kept for routine continuity)
+# /weekly-job-scan (now runs Weekly at 04:00 SGT — name kept for routine continuity)
 
 Run the full job scan and email a digest. Each run is a fresh session —
 carry no state between runs; everything needed is below.
 
 ## Step 1 — Get candidates.json (fetch-first, file fallback)
+
 1. Run `python3 mcf_job_scan.py`. If it prints a "Scanned N ... kept M" line,
    fresh data is in `candidates.json` — use it and go to Step 2.
    (The environment's Network access must allow api.mycareersfuture.gov.sg —
@@ -25,6 +26,7 @@ Listing freshness window: 7 days (script default). In the digest, always state
 the data's `generated_at` timestamp.
 
 ## Step 2 — Read the résumé (source of truth)
+
 Read the Google Doc whose fileId is in the environment variable
 **RESUME_DOC_ID**. If that variable is unset or empty, default to
 `1lbPFv7NzVAf1qS00J_e1ZcaHyXgQ9kguBiz5jj4Nwqg` (Resume_RandyChng_v2).
@@ -32,9 +34,11 @@ Read it via the Google Drive connector, fresh each run — never a cached
 profile. Extract skills, years per skill, and domain experience.
 
 ## Step 3 — Fit-score each candidate (0–10)
+
 Randy's core stack — weight these heaviest: **Java, Spring Boot, React,
 TypeScript, JavaScript.** A close fit means the role's primary stack IS this
 stack.
+
 - **Years check (important):** the API's `minimumYearsExperience` is usually
   null in search results, so READ THE DESCRIPTION for the actual years ask.
   Randy has 3+ years. A close fit asks ≤3 (or ≤4, negotiable).
@@ -49,8 +53,9 @@ stack.
   the description is authoritative.
 
 ## Step 4 — Compose the email: EXACTLY top 5 = 3 close fits + 2 stretch
+
 Send to **chngyuanlong@gmail.com**. Subject:
-`Your daily job match — 3 close fits + 2 stretch (week of <date>)`
+`Your Weekly job match — 3 close fits + 2 stretch (week of <date>)`
 
 - **Close fits (3):** the three highest-scoring roles where Randy IS adequate:
   stack matches his core (Java/Spring Boot/React/TS/JS), years ask ≤ his 3+,
@@ -70,12 +75,14 @@ Send to **chngyuanlong@gmail.com**. Subject:
 - Skimmable — read on a phone.
 
 ## First-run safety
+
 On the FIRST run after any config change, create the email as a **Gmail
 draft**, not sent. (The available Gmail connector only creates drafts anyway;
 a draft addressed to Randy is the deliverable.)
 
 ## Standing decisions (change on request)
-1. Cadence: DAILY at 04:00 Asia/Singapore (set in the Routine's schedule UI).
+
+1. Cadence: Weekly at 04:00 Asia/Singapore (set in the Routine's schedule UI).
 2. Listing freshness: 7 days.
 3. Digest: exactly 3 close fits + 2 stretch.
 4. Hidden-salary roles → include & flag.
@@ -83,6 +90,7 @@ a draft addressed to Randy is the deliverable.)
 6. Résumé source → env var RESUME_DOC_ID, defaulting to Resume_RandyChng_v2.
 
 ## Guardrails
+
 - Never fabricate a listing, salary, or link. Missing field → say so.
 - This routine only READS (MCF API, résumé) and creates ONE Gmail draft.
   It must not write to Notion or Drive.
