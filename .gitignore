@@ -1,8 +1,8 @@
 # generated each run
 # seen.json is COMMITTED (dedup memory) — do NOT ignore it
-# candidates.json is COMMITTED in the cloud-routine variant (cron pushes it);
-# uncomment the next line only if your Claude task runs locally and reads the file directly
-# candidates.json
+# candidates.json is regenerated fresh every run and never committed — the
+# routine's hard rule is it pushes seen.json only.
+candidates.json
 
 # python
 __pycache__/
