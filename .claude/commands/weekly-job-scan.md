@@ -61,6 +61,18 @@ stack.
 - **Domain boost: +1** for banking / payments / fintech / financial services.
 - The script's `desc-says-Ny` flag is a cheap regex hint only; YOUR read of
   the description is authoritative for the scoped gate.
+- **Ground every close-fit claim in the actual `description` text, not just
+  `skills` tags.** `candidates.json` now carries real JD prose (fetched
+  per-candidate from MCF's job-detail endpoint, ~600–3000 chars) — the
+  `skills` array is MCF's own auto-tagging and routinely omits seniority
+  language and specific tool/years requirements that only appear in the
+  prose. A stack-tag match alone (e.g. "Java, Spring Boot, React" in
+  `skills`) is never sufficient to call something a close fit — read the
+  description and check it against the scoped-experience gate above before
+  scoring 8+. If a candidate's `description` is unusually short (under ~300
+  chars — this can happen when the per-job fetch failed for that one
+  listing) treat it as unverified: cap the score at stretch (≤6) and say so
+  in the digest.
 
 ## Step 4 — Compose the email: up to 5 NEW roles = 3 close + 2 stretch
 **De-dup first:** only consider candidates with `already_seen == false`.

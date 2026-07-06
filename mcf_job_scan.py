@@ -81,6 +81,29 @@ def fetch_page(term: str, page: int) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def fetch_job_description(uuid: str) -> str:
+    """Full JD prose via the per-job detail endpoint.
+
+    REALITY CHECK (confirmed live 2026-07-06): /v2/search's `description`
+    field comes back empty for every listing — not intermittent, always.
+    Only /v2/jobs/{uuid} has the actual text (e.g. "4+ years Java-J2EE...
+    banking environment"), which is what the scoped-experience gate and the
+    years-from-description filter below both depend on. One call per
+    candidate that survives apply_structural_filters — see main().
+    """
+    url = f"https://api.mycareersfuture.gov.sg/v2/jobs/{uuid}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (job-scan personal script)",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return re.sub(r"<[^>]+>", " ", data.get("description", "") or "")[:3000]
+
+
 def parse_date(value):
     """MCF dates arrive in a few shapes; normalise to aware UTC datetime."""
     if not value:
@@ -145,8 +168,15 @@ def years_from_description(desc: str):
     return min(hits) if hits else None
 
 
-def apply_filters(rec: dict, cutoff: datetime) -> tuple[bool, list[str]]:
-    """Return (keep, flags). Hard-drop reasons return keep=False."""
+def apply_structural_filters(rec: dict, cutoff: datetime) -> tuple[bool, list[str]]:
+    """Return (keep, flags) using only structured API fields — no JD prose.
+
+    Description-dependent checks (years-of-experience mentioned only in JD
+    text) can't run here: /v2/search always returns an empty `description`,
+    so they're deferred to apply_description_filter() after main() fetches
+    the real text for whatever survives this pass. Hard-drop reasons here
+    return keep=False; description-based drops happen later.
+    """
     flags = []
 
     # Rule: no canonical link, no inclusion.
@@ -167,19 +197,13 @@ def apply_filters(rec: dict, cutoff: datetime) -> tuple[bool, list[str]]:
         return False, ["excluded-title"]
 
     # Years of experience: drop if the structured field asks for more.
-    # REALITY CHECK (from live data): the /v2/search endpoint usually returns
-    # minimumYearsExperience as null, so also scan the description for an
-    # explicit "N+ years" ask as a cheap backstop. The LLM scorer remains the
-    # final authority on ambiguous cases.
+    # The structured field is usually null (see REALITY CHECK on
+    # fetch_job_description) — when it's null, defer to the description-based
+    # check once the real JD text is available.
     if rec["min_years"] is not None and rec["min_years"] > MAX_YEARS_EXPERIENCE:
         return False, ["too-many-years"]
     if rec["min_years"] is None:
-        desc_years = years_from_description(rec["description"])
-        if desc_years is not None and desc_years > MAX_YEARS_EXPERIENCE + 1:
-            # +1 slack: "4 years" asks are often negotiable at 3; 5+ is not.
-            return False, ["too-many-years-desc"]
-        flags.append("years-unstated" if desc_years is None
-                     else f"desc-says-{desc_years}y")
+        flags.append("years-pending-jd-fetch")
 
     # Salary: drop only when a stated max is below the floor.
     # Undisclosed salary is flagged, not dropped (decision: include-and-flag).
@@ -193,6 +217,24 @@ def apply_filters(rec: dict, cutoff: datetime) -> tuple[bool, list[str]]:
         flags.append("senior-stretch")
 
     return True, flags
+
+
+def apply_description_filter(rec: dict) -> tuple[bool, str | None]:
+    """Second pass, run after the real JD text has been fetched.
+
+    Resolves the "years-pending-jd-fetch" placeholder left by
+    apply_structural_filters: scans the now-real `description` for an
+    explicit "N+ years" ask. Returns (keep, replacement_flag);
+    replacement_flag is None when there was nothing to resolve.
+    """
+    if "years-pending-jd-fetch" not in rec["flags"]:
+        return True, None
+    desc_years = years_from_description(rec["description"])
+    if desc_years is not None and desc_years > MAX_YEARS_EXPERIENCE + 1:
+        # +1 slack: "4 years" asks are often negotiable at 3; 5+ is not.
+        return False, "too-many-years-desc"
+    return True, ("years-unstated" if desc_years is None
+                  else f"desc-says-{desc_years}y")
 
 
 def iter_pages_from_api():
@@ -258,13 +300,48 @@ def main():
             if not rec["uuid"] or rec["uuid"] in seen:
                 continue
             seen.add(rec["uuid"])
-            keep, flags = apply_filters(rec, cutoff)
+            keep, flags = apply_structural_filters(rec, cutoff)
             if keep:
                 rec["flags"] = flags
-                rec["stack_signal"] = stack_signal(rec)
                 kept.append(rec)
             else:
                 dropped_summary[flags[0]] = dropped_summary.get(flags[0], 0) + 1
+
+    # ---- Fetch real JD text for everything that survived structural
+    # filters, so the years-of-description check and stack_signal ranking
+    # both work on genuine content instead of the always-empty /v2/search
+    # description field. Skipped in --from-dir mode: that mode exists for
+    # sandboxes with no outbound network at all, so a per-job fetch would
+    # just fail the same way the bulk fetch would.
+    fetch_failures = 0
+    if "--from-dir" not in sys.argv:
+        for rec in kept:
+            try:
+                full_desc = fetch_job_description(rec["uuid"])
+                if full_desc.strip():
+                    rec["description"] = full_desc
+            except Exception as exc:
+                fetch_failures += 1
+                print(f"[warn] description fetch failed for {rec['uuid']}: {exc}",
+                      file=sys.stderr)
+            time.sleep(0.3)  # be polite to a free public API
+
+    # ---- Second filter pass: now that description is real, resolve the
+    # years-pending-jd-fetch placeholder and drop anything whose JD text
+    # asks for more years than the structured field revealed.
+    resolved_kept = []
+    for rec in kept:
+        keep, replacement_flag = apply_description_filter(rec)
+        if not keep:
+            dropped_summary["too-many-years-desc"] = (
+                dropped_summary.get("too-many-years-desc", 0) + 1)
+            continue
+        if replacement_flag:
+            rec["flags"] = [f for f in rec["flags"] if f != "years-pending-jd-fetch"]
+            rec["flags"].append(replacement_flag)
+        rec["stack_signal"] = stack_signal(rec)
+        resolved_kept.append(rec)
+    kept = resolved_kept
 
     # Rough pre-sort: core-stack hits desc, anti-stack hits asc.
     kept.sort(key=lambda r: (-len(r["stack_signal"]["core_hits"]),
@@ -321,6 +398,9 @@ def main():
     print(f"Scanned {len(seen)} unique listings; kept {len(kept)} "
           f"({new_count} new since last run; top 30 written to candidates.json).")
     print(f"Dropped: {dropped_summary}")
+    if fetch_failures:
+        print(f"[warn] description fetch failed for {fetch_failures} listing(s) — "
+              f"those entries fall back to an empty description.", file=sys.stderr)
 
 
 if __name__ == "__main__":
