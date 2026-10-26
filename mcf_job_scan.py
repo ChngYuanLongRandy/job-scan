@@ -55,6 +55,33 @@ CORE_STACK = ["java", "spring", "react", "typescript", "javascript"]
 ANTI_STACK = ["node.js", "nodejs", "next.js", "nextjs", ".net", "c#", "golang",
               "c++", "php", "ruby", "angular only"]
 
+# Direct-employer-only rule: drop listings posted by recruitment agencies,
+# headhunters or staffing/manpower firms. MCF's own `isPostedOnBehalf` flag only
+# catches agencies posting for a named client; many agencies post under their own
+# name with it off, so names and licence text are checked too.
+# RECRUITER = hard drop. UNVERIFIED = kept and flagged, so the routine lists it
+# separately with the reason instead of presenting it as a direct-employer role.
+KNOWN_AGENCIES = re.compile(
+    r"\b(persol|randstad|robert walters|hays|michael page|page personnel|adecco|"
+    r"manpower(group)?|robert half|kelly services|hudson|morgan mckinley|"
+    r"jac recruitment|spencer ogden|kforce|talent international|aquent|"
+    r"elliott moss|recruit express|recruit expert|kopi recruit)\b", re.I)
+AGENCY_NAME_TOKENS = re.compile(
+    r"\b(recruit(ment|ers?)?|staffing|manpower|headhunt(er|ers|ing)?|"
+    r"executive search|talent search|search (associates|group|partners)|"
+    r"personnel|human resources?|hr services|outsourcing)\b", re.I)
+WEAK_NAME_TOKENS = re.compile(
+    r"\b(consult(ing|ancy|ants?)|talents?|resources?|search|solutions? provider|"
+    r"career|connect)\b", re.I)          # consultancies and 'talent' firms are often agencies, often not
+# Singapore Employment Agency licence / personnel registration numbers in JD text
+EA_LICENCE_TEXT = re.compile(
+    r"(\bEA\s*(licen[cs]e|lic\.?)\b|\bEA\s*(no|number|reg(istration)?)\b|"
+    r"licen[cs]e\s*(no|number)\.?\s*[:#]?\s*\d{2}[A-Z]\d{4}|"
+    r"\bR\d{7}\b|\bEAP?\s*(reg|registration)\b|employment agency)", re.I)
+CLIENT_LANGUAGE = re.compile(
+    r"\b(our client|on behalf of (our|a) client|client'?s? (name )?(is )?confidential|"
+    r"confidential (client|employer|company)|leading (mnc|multinational) client)\b", re.I)
+
 # -----------------------------------------------------------------------
 
 
@@ -133,12 +160,48 @@ def job_record(job: dict) -> dict:
         "salary_max": salary.get("maximum"),
         "position_levels": position_levels,
         "skills": skills,
+        "hiring_company": (job.get("hiringCompany") or {}).get("name"),
+        "posted_on_behalf": bool(metadata.get("isPostedOnBehalf")),
+        "employer_hidden": bool(metadata.get("isHideHiringEmployerName")),
         "description": re.sub(r"<[^>]+>", " ", job.get("description", ""))[:2500],
         "posted": metadata.get("newPostingDate") or metadata.get("originalPostingDate"),
         "expiry": metadata.get("expiryDate"),
         "url": (metadata.get("jobDetailsUrl")
                 or f"https://www.mycareersfuture.gov.sg/job/{job.get('uuid','')}"),
     }
+
+
+def poster_check(rec: dict) -> tuple[str, str]:
+    """Classify who posted the listing from structured fields and name only.
+
+    Returns ("recruiter", reason), ("unverified", reason) or ("direct", "").
+    The JD-text checks (licence numbers, 'our client') run later, in
+    poster_check_description(), once the real description has been fetched.
+    """
+    name = rec["company"] or ""
+    if rec["posted_on_behalf"]:
+        return "recruiter", f"posted on behalf of {rec['hiring_company'] or 'a client'} by {name}"
+    if KNOWN_AGENCIES.search(name):
+        return "recruiter", f"poster '{name}' is a known recruitment agency"
+    if AGENCY_NAME_TOKENS.search(name):
+        return "recruiter", f"poster name '{name}' is a recruitment/staffing firm"
+    if rec["employer_hidden"] or name.lower() in ("", "unknown", "confidential"):
+        return "unverified", "employer name is withheld or confidential"
+    if WEAK_NAME_TOKENS.search(name):
+        return "unverified", f"poster '{name}' looks like a consultancy or talent firm; could not confirm it is the employer"
+    return "direct", ""
+
+
+def poster_check_description(rec: dict) -> tuple[str, str]:
+    """Second poster check on the real JD text (agency licence numbers, 'our client')."""
+    desc = rec.get("description") or ""
+    m = EA_LICENCE_TEXT.search(desc)
+    if m:
+        return "recruiter", f"JD carries an employment agency licence/registration marker ('{m.group(0).strip()}')"
+    m = CLIENT_LANGUAGE.search(desc)
+    if m:
+        return "unverified", f"JD speaks of a client ('{m.group(0).strip()}'), so the poster may be an agency"
+    return "direct", ""
 
 
 def stack_signal(rec: dict) -> dict:
@@ -215,6 +278,15 @@ def apply_structural_filters(rec: dict, cutoff: datetime) -> tuple[bool, list[st
     # Seniority: flag, don't drop (decision: show max 1 stretch pick).
     if SENIOR_MARKERS.search(rec["title"]):
         flags.append("senior-stretch")
+
+    # Direct employers only. Runs last so the recruiter count covers only
+    # listings that passed every other filter.
+    status, reason = poster_check(rec)
+    if status == "recruiter":
+        return False, ["recruiter-posted"]
+    if status == "unverified":
+        flags.append("unverified-poster")
+        rec["poster_note"] = reason
 
     return True, flags
 
@@ -293,6 +365,7 @@ def main():
 
     seen: set[str] = set()
     kept, dropped_summary = [], {}
+    recruiter_examples = []        # 'company: reason' for listings dropped as recruiter-posted
 
     for data in source:
         for job in data.get("results", []):
@@ -306,6 +379,8 @@ def main():
                 kept.append(rec)
             else:
                 dropped_summary[flags[0]] = dropped_summary.get(flags[0], 0) + 1
+                if flags[0] == "recruiter-posted":
+                    recruiter_examples.append(f"{rec['company']}: {poster_check(rec)[1]}")
 
     # ---- Fetch real JD text for everything that survived structural
     # filters, so the years-of-description check and stack_signal ranking
@@ -331,6 +406,14 @@ def main():
     # asks for more years than the structured field revealed.
     resolved_kept = []
     for rec in kept:
+        status, reason = poster_check_description(rec)
+        if status == "recruiter":
+            dropped_summary["recruiter-posted"] = dropped_summary.get("recruiter-posted", 0) + 1
+            recruiter_examples.append(f"{rec['company']}: {reason}")
+            continue
+        if status == "unverified" and "unverified-poster" not in rec["flags"]:
+            rec["flags"].append("unverified-poster")
+            rec["poster_note"] = reason
         keep, replacement_flag = apply_description_filter(rec)
         if not keep:
             dropped_summary["too-many-years-desc"] = (
@@ -390,6 +473,9 @@ def main():
         "kept": len(kept),
         "new_since_last_run": new_count,
         "dropped": dropped_summary,
+        "recruiter_posted_excluded": dropped_summary.get("recruiter-posted", 0),
+        "recruiter_examples": sorted(set(recruiter_examples))[:6],
+        "unverified_poster": sum(1 for r in kept if "unverified-poster" in r["flags"]),
         "candidates": kept[:30],   # cap what goes to the LLM scorer
     }
     with open("candidates.json", "w", encoding="utf-8") as fh:

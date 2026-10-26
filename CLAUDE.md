@@ -10,6 +10,10 @@ already shown, and emails him a short digest of up to 5 new roles (3 close
 fits + 2 stretch picks). Goal: kill the "says Software Engineer, actually
 wants 5 years" noise so he only reads roles worth his time.
 
+Only direct-employer postings are shown: recruiter, headhunter and staffing
+listings are dropped and counted, and unclear posters are listed separately as
+"Unverified poster" (see Step 3b of the command).
+
 ## How it runs
 The operative instructions live in `.claude/commands/weekly-job-scan.md`
 (the `/weekly-job-scan` command — name kept for continuity even though

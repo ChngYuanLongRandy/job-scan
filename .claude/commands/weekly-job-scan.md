@@ -74,6 +74,29 @@ stack.
   listing) treat it as unverified: cap the score at stretch (≤6) and say so
   in the digest.
 
+## Step 3b — Direct-employer-only criterion (applied on top of ALL criteria above)
+Only include jobs posted directly by the hiring employer. Exclude listings from
+recruitment agencies, headhunters, or staffing/manpower firms (e.g. PERSOL,
+Randstad, Robert Walters, Hays, Michael Page, Adecco, ManpowerGroup), including
+postings with an employment agency licence number or where the employer is
+withheld or confidential. If you can't tell whether the poster is a direct
+employer, list it separately under "Unverified poster" with the reason.
+
+How it is enforced:
+- `mcf_job_scan.py` does the first pass. It drops listings that are posted on
+  behalf of a client (`isPostedOnBehalf`), come from a known agency or a
+  recruitment/staffing-named poster, or carry an agency licence marker in the JD;
+  these are counted in `recruiter_posted_excluded` (examples in
+  `recruiter_examples`). It keeps, with the flag `unverified-poster` and the reason in
+  `poster_note`, listings whose employer is hidden, whose poster looks like a
+  consultancy or talent firm, or whose JD talks about "our client".
+- YOUR read is the final check. For every candidate you would show, glance at
+  `company` and the `description` for agency signals the script cannot catch
+  (agency licence numbers such as "EA Licence No.", "our client", "on behalf of").
+  If you find a recruiter the script missed, drop it and add it to the recruiter
+  count. If you cannot tell, treat it as unverified. Never promote an
+  `unverified-poster` listing into the close-fit or stretch picks.
+
 ## Step 4 — Compose the email: up to 5 NEW roles = 3 close + 2 stretch
 **De-dup first:** only consider candidates with `already_seen == false`.
 Roles shown in the last 7 days are suppressed. If everything is already seen,
@@ -94,7 +117,14 @@ Send to **chngyuanlong@gmail.com**. Subject:
   stretch as a close fit to hit a number.
 - Every row: title · company · fit /10 · years asked (and of what) · salary
   (or "undisclosed") · why-you-fit · gaps · MCF link. Links mandatory.
+- One "Unverified poster" section after the picks (only if there are any, new
+  and not already seen): one line each, title · company · the reason it could not
+  be confirmed as a direct employer (`poster_note` or your own reading) · MCF
+  link. These are not scored, and do not count toward the 3 close + 2 stretch.
 - One "Filtered out" section: counts by drop reason + 1–2 named examples.
+- The very last line of the digest: "Excluded as recruiter-posted: N" where N =
+  `recruiter_posted_excluded` from candidates.json plus any you dropped yourself
+  in Step 3b (with up to 3 example company names).
 - State the data's `generated_at` and `new_since_last_run` so Randy sees
   freshness at a glance. Skimmable — read on a phone.
 
@@ -117,6 +147,8 @@ a draft addressed to Randy is the deliverable.)
 4. Hidden-salary roles → include & flag.
 5. Domain → banking/fintech/payments +1 fit boost.
 6. Résumé source → env var RESUME_DOC_ID, defaulting to Resume_RandyChng_v2.
+7. Direct employers only → recruiter/agency/staffing/confidential-employer
+   postings excluded and counted; unclear posters listed as "Unverified poster".
 
 ## Guardrails
 - Never fabricate a listing, salary, or link. Missing field → say so.
