@@ -65,7 +65,8 @@ KNOWN_AGENCIES = re.compile(
     r"\b(persol|randstad|robert walters|hays|michael page|page personnel|adecco|"
     r"manpower(group)?|robert half|kelly services|hudson|morgan mckinley|"
     r"jac recruitment|spencer ogden|kforce|talent international|aquent|"
-    r"elliott moss|recruit express|recruit expert|kopi recruit)\b", re.I)
+    r"elliott moss|recruit express|recruit expert|kopi recruit|"
+    r"encora technologies|jon ?davidson)\b", re.I)
 AGENCY_NAME_TOKENS = re.compile(
     r"\b(recruit(ment|ers?)?|staffing|manpower|headhunt(er|ers|ing)?|"
     r"executive search|talent search|search (associates|group|partners)|"
